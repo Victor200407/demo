@@ -14,10 +14,11 @@ public class CubeSphereGrid : MonoBehaviour
     public Projection projection = Projection.Equiangular;
 
     [Header("Remap wyglądu siatki")]
-    [Range(0f,1f)] public float edgeTighten   = 0.0f; // delikatne prostowanie linii przy szwach
-    [Range(0f,1f)] public float cornerSquare  = 0.35f; // „kwadratowanie” naroży (przy wierzchołkach kostki)
-    [Range(0.5f,4f)] public float cornerPower = 1.5f;  // szybkość narastania efektu przy samym rogu
-    [Range(0f,1f)] public float mixToSpherify = 0.0f;  // lekki miks do Spherify (wyrównuje pola)
+    [Range(0f,1f)] public float edgeTighten    = 0.0f; // delikatne prostowanie linii przy szwach
+    [Range(0f,1f)] public float cornerSquare   = 0.35f; // „kwadratowanie” naroży (przy wierzchołkach kostki)
+    [Range(0.5f,4f)] public float cornerPower  = 1.5f;  // szybkość narastania efektu przy samym rogu
+    [Range(0f,1f)] public float mixToSpherify  = 0.0f;  // lekki miks do Spherify (wyrównuje pola)
+    [Range(0f,1f)] public float uniformCorners = 1.0f;  // wzmacnia wyrównywanie komórek przy narożach
 
     public Vector3 Center => transform.position;
     public int N => Mathf.Max(2, resolution);
@@ -41,10 +42,7 @@ public class CubeSphereGrid : MonoBehaviour
     public Vector3 CellToWorldCenter(Face face, int i, int j)
     {
         UVFromIJ(i, j, out float u, out float v);
-        (u, v) = RemapUV(u, v);
         Vector3 dir = ProjectDir(face, u, v);
-        if (mixToSpherify > 0f)
-            dir = Vector3.Slerp(dir, SpherifyDir(face, u, v), mixToSpherify).normalized;
         return Center + dir * radius;
     }
 
@@ -78,11 +76,7 @@ public class CubeSphereGrid : MonoBehaviour
         float u = vertical ? constCoord : varCoord;
         float v = vertical ? varCoord   : constCoord;
 
-        (u, v) = RemapUV(u, v);
-
         Vector3 dir = ProjectDir(face, u, v);
-        if (mixToSpherify > 0f)
-            dir = Vector3.Slerp(dir, SpherifyDir(face, u, v), mixToSpherify).normalized;
 
         return Center + dir * radius;
     }
@@ -103,12 +97,18 @@ public class CubeSphereGrid : MonoBehaviour
     /// Kierunek promienia dla (face,u,v) wg bieżącej projekcji.
     public Vector3 ProjectDir(Face face, float u, float v)
     {
-        return projection switch
+        Vector2 uv = RemapUV(face, u, v);
+        Vector3 dir = projection switch
         {
-            Projection.Gnomonic    => GnomonicDir(face, u, v),
-            Projection.Equiangular => EquiangularDir(face, u, v),
-            _                      => SpherifyDir(face, u, v),
+            Projection.Gnomonic    => GnomonicDir(face, uv.x, uv.y),
+            Projection.Equiangular => EquiangularDir(face, uv.x, uv.y),
+            _                      => SpherifyDir(face, uv.x, uv.y),
         };
+
+        if (mixToSpherify > 0f)
+            dir = Vector3.Slerp(dir, SpherifyDir(face, uv.x, uv.y), mixToSpherify).normalized;
+
+        return dir.normalized;
     }
 
     // ====== INTERNAL ======
@@ -161,9 +161,12 @@ public class CubeSphereGrid : MonoBehaviour
         }
     }
 
-    // --- Remap UV: najpierw delikatne „edgeTighten”, potem „cornerSquare” przy wierzchołkach ---
-    (float, float) RemapUV(float u, float v)
+    // --- Remap UV: wyrównanie przy narożach oraz kosmetyka szwów ---
+    Vector2 RemapUV(Face face, float u, float v)
     {
+        Vector2 uv = new Vector2(u, v);
+        uv = UniformizeUV(face, uv);
+
         // Maska: 1 w środku płytki, 0 przy samych krawędziach (żeby szew był identyczny na obu ścianach)
         float EdgeMask(float x)
         {
@@ -171,8 +174,9 @@ public class CubeSphereGrid : MonoBehaviour
             float a = 1f - Mathf.Clamp01((Mathf.Abs(x) - 0.95f) / 0.05f); // 0.95..1.00 map -> 1..0
             return 1f - a; // 0 przy krawędzi, ~1 w środku
         }
-        float maskU = EdgeMask(u);
-        float maskV = EdgeMask(v);
+
+        float maskU = EdgeMask(uv.x);
+        float maskV = EdgeMask(uv.y);
         float mask  = Mathf.Min(maskU, maskV); // jeśli dotykamy dowolnej krawędzi, maska≈0
 
         // 1) delikatne prostowanie przy szwach (tylko gdy mask>0)
@@ -186,21 +190,85 @@ public class CubeSphereGrid : MonoBehaviour
                 return t * 2f - 1f;
             }
             float k = edgeTighten * mask;
-            u = Mathf.Lerp(u, Remap1(u), k);
-            v = Mathf.Lerp(v, Remap1(v), k);
+            uv.x = Mathf.Lerp(uv.x, Remap1(uv.x), k);
+            uv.y = Mathf.Lerp(uv.y, Remap1(uv.y), k);
         }
 
         // 2) „kwadratowanie” naroży (też wyciszamy przy samych brzegach)
         if (cornerSquare > 0f && mask > 0f)
         {
-            float au = Mathf.Abs(u), av = Mathf.Abs(v);
+            float au = Mathf.Abs(uv.x), av = Mathf.Abs(uv.y);
             float f  = Mathf.Pow(au * av, cornerPower);               // rośnie ku narożu
             float gamma = Mathf.Lerp(1f, 0.6f, (cornerSquare * f) * mask);
-            u = Mathf.Sign(u) * Mathf.Pow(au, gamma);
-            v = Mathf.Sign(v) * Mathf.Pow(av, gamma);
+            uv.x = Mathf.Sign(uv.x) * Mathf.Pow(au, gamma);
+            uv.y = Mathf.Sign(uv.y) * Mathf.Pow(av, gamma);
         }
 
-        return (u, v);
+        return uv;
+    }
+
+    Vector2 UniformizeUV(Face face, Vector2 uv)
+    {
+        float strength = Mathf.Clamp01(uniformCorners);
+        if (strength <= 0f)
+            return new Vector2(Mathf.Clamp(uv.x, -1f, 1f), Mathf.Clamp(uv.y, -1f, 1f));
+
+        float sampleStep = Mathf.Min(0.45f, 1.5f / Mathf.Max(2, resolution));
+        for (int iter = 0; iter < 3; iter++)
+        {
+            float lenU = EstimateSpacing(face, uv, sampleStep, true);
+            float lenV = EstimateSpacing(face, uv, sampleStep, false);
+            if (lenU <= 1e-6f || lenV <= 1e-6f)
+                break;
+
+            float ratio = lenU / lenV;
+            if (Mathf.Abs(ratio - 1f) < 1e-3f)
+                break;
+
+            float corner = Mathf.Max(Mathf.Abs(uv.x), Mathf.Abs(uv.y));
+            float weight = strength * corner * corner; // najmocniej przy narożach
+            if (weight <= 0f)
+                break;
+
+            float adjust = Mathf.Pow(Mathf.Clamp(ratio, 0.1f, 10f), 0.5f);
+            adjust = Mathf.Lerp(1f, adjust, weight);
+
+            uv.x = Mathf.Clamp(uv.x / adjust, -1f, 1f);
+            uv.y = Mathf.Clamp(uv.y * adjust, -1f, 1f);
+        }
+
+        return uv;
+    }
+
+    float EstimateSpacing(Face face, Vector2 uv, float delta, bool horizontal)
+    {
+        float du = horizontal ? delta : 0f;
+        float dv = horizontal ? 0f : delta;
+
+        float u0 = Mathf.Clamp(uv.x - du, -1f, 1f);
+        float v0 = Mathf.Clamp(uv.y - dv, -1f, 1f);
+        float u1 = Mathf.Clamp(uv.x + du, -1f, 1f);
+        float v1 = Mathf.Clamp(uv.y + dv, -1f, 1f);
+
+        Vector3 dir0 = ProjectDirRaw(face, u0, v0);
+        Vector3 dir1 = ProjectDirRaw(face, u1, v1);
+        float dot = Mathf.Clamp(Vector3.Dot(dir0, dir1), -1f, 1f);
+        return Mathf.Acos(dot);
+    }
+
+    Vector3 ProjectDirRaw(Face face, float u, float v)
+    {
+        Vector3 dir = projection switch
+        {
+            Projection.Gnomonic    => GnomonicDir(face, u, v),
+            Projection.Equiangular => EquiangularDir(face, u, v),
+            _                      => SpherifyDir(face, u, v),
+        };
+
+        if (mixToSpherify > 0f)
+            dir = Vector3.Slerp(dir, SpherifyDir(face, u, v), mixToSpherify).normalized;
+
+        return dir.normalized;
     }
 
 
