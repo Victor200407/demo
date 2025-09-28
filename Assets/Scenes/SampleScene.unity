@@ -750,9 +750,9 @@ MonoBehaviour:
   moveSpeed: 6
   turnSpeedDeg: 120
   turnLerp: 15
-  maxDigDepth: 2
-  digSpeed: 1.5
-  ascendSpeed: 2
+  maxDigDepth: 1
+  digSpeed: 4
+  ascendSpeed: 4
   startDepth: 0
 --- !u!4 &1927882379
 Transform:

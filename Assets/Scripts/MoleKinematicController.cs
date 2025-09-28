@@ -25,8 +25,8 @@ public class MoleKinematicController : MonoBehaviour
 
     [Header("Kopanie")]
     public float maxDigDepth = 2.0f;
-    public float digSpeed = 1.5f;     // m/s w głąb
-    public float ascendSpeed = 2.0f;  // m/s ku powierzchni
+    public float digSpeed = 4.0f;     // m/s w głąb
+    public float ascendSpeed = 4.0f;  // m/s ku powierzchni
     public float startDepth = 0f;
 
     float currentDepth;
