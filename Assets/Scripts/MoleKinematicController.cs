@@ -3,148 +3,207 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 #endif
 
-/// Kinematyczny ruch po sferze, bez grawitacji.
-/// Sterowanie:
-///  - A/D: obrót wokół lokalnego 'up' (yaw).
-///  - W/S: ruch do przodu/tyłu po wielkim kole (geodezyjnie) => W okrąża planetę.
-///  - Space (hold): kopanie (pogłębienie), release: wynurzenie.
-public class MoleKinematicController : MonoBehaviour
+public class MoleRotateAroundController : MonoBehaviour
 {
     [Header("Referencje")]
-    public Planet planet;
-    public Transform cameraPivot;  // opcjonalny pivot kamery
-    public Transform cam;          // nie jest wymagane do sterowania, tylko do kamery
+    [SerializeField] private Planet planet;
+    [SerializeField] private Transform cameraPivot;
 
     [Header("Ruch")]
-    [Tooltip("Prędkość ruchu po łuku (m/s po powierzchni).")]
-    public float moveSpeed = 6f;
-    [Tooltip("Szybkość obrotu A/D (stopnie/sek).")]
-    public float turnSpeedDeg = 120f;
-    [Tooltip("Wygładzenie rotacji 'up/forward'.")]
-    public float turnLerp = 15f;
+    [SerializeField] private float moveSpeed = 6f;
+    [SerializeField] private float turnSpeedDeg = 360f;
+    [SerializeField] private float rotSmooth = 15f;
 
     [Header("Kopanie")]
-    public float maxDigDepth = 2.0f;
-    public float digSpeed = 4.0f;     // m/s w głąb
-    public float ascendSpeed = 4.0f;  // m/s ku powierzchni
-    public float startDepth = 0f;
+    [SerializeField] private float maxDigDepth = 2f;
+    [SerializeField] private float digSpeed = 4f;
+    [SerializeField] private float ascendSpeed = 4f;
+    [SerializeField] private float startDepth = 0f;
 
-    float currentDepth;
+    [Header("Animator (gate DigStart)")]
+    [SerializeField] private Animator animator;
+    [SerializeField] private string paramIsDigging = "IsDigging";
+    [SerializeField] private string trigDigStart = "DigStart";
+    [SerializeField] private string trigDigStop = "DigStop";
+    [SerializeField] private string digStartStateTag = "DigStart";
+    [SerializeField] private float digStartExitNormalizedTime = 0.98f;
+    [SerializeField] private bool delayDepthUntilAfterDigStart = true;
+
+    // ── stan
+    float depth;
+    bool prevDigHeld; 
+    bool gateLocked;
+
+    // ── cache hashy
+    int hIsDigging;
+    int hDigStart;
+    int hDigStop;
+
+    // epsilon do porównań bliskich zeru
+    const float EPS = 1e-6f;
+
+    void Reset()
+    {
+        if (!planet) planet = FindFirstObjectByType<Planet>();
+    }
 
     void Start()
     {
-        if (!planet)
-        {
-            Debug.LogError("MoleKinematicController: przypisz Planet.", this);
-            enabled = false;
-            return;
-        }
+        if (!planet) { Debug.LogError("Assign Planet.", this); enabled = false; return; }
 
-        currentDepth = Mathf.Clamp(startDepth, 0f, maxDigDepth);
-        transform.position = planet.PointOnShell(transform.position, currentDepth);
-        // Ustaw poprawne up/forward na starcie
-        Vector3 up = planet.UpAt(transform.position);
-        Vector3 fwd = Vector3.ProjectOnPlane(transform.forward, up).normalized;
-        if (fwd.sqrMagnitude < 1e-6f) fwd = Vector3.Cross(up, Vector3.right).normalized;
+        depth = Mathf.Clamp(startDepth, 0f, maxDigDepth);
+
+        // startowa pozycja i rotacja
+        Vector3 up = Up();
+        transform.position = planet.Center + up * ShellRadius();
+        Vector3 fwd = ProjectOnPlaneSafe(transform.forward, up);
         transform.rotation = Quaternion.LookRotation(fwd, up);
 
-        if (cameraPivot) cameraPivot.position = transform.position;
+        if (cameraPivot)
+        {
+            cameraPivot.position = transform.position;
+        }
+
+        if (animator)
+        {
+            hIsDigging = Animator.StringToHash(paramIsDigging);
+            hDigStart  = Animator.StringToHash(trigDigStart);
+            hDigStop   = Animator.StringToHash(trigDigStop);
+        }
     }
 
     void Update()
     {
         if (!planet) return;
 
-        Vector3 up = planet.UpAt(transform.position);
+        // 1) Wejście
+        ReadInput(out float yaw, out float move, out bool digHeld);
 
-        // --- Wejścia (działa dla New Input System i/lub starego) ---
-        float yawInput = 0f;   // A/D
-        float moveInput = 0f;  // W/S
-        bool digHeld = false;
+        // 2) Animator + gate
+        DriveAnimator(digHeld);
 
+        // 3) Yaw w miejscu (A/D)
+        Vector3 up = Up();
+        if (Mathf.Abs(yaw) > EPS)
+            transform.Rotate(up, yaw * turnSpeedDeg * Time.deltaTime, Space.World);
+
+        // 4) Ruch po wielkim kole (W/S)
+        if (Mathf.Abs(move) > EPS)
+        {
+            Vector3 fwdT = ProjectOnPlaneSafe(transform.forward, up);
+            float angleDeg = (moveSpeed * Mathf.Clamp(move, -1f, 1f) * Time.deltaTime / ShellRadius()) * Mathf.Rad2Deg;
+            Vector3 axis = Vector3.Cross(up, fwdT);
+            if (axis.sqrMagnitude > EPS)
+            {
+                axis.Normalize();
+                transform.RotateAround(planet.Center, axis, angleDeg);
+                transform.rotation = Quaternion.AngleAxis(angleDeg, axis) * transform.rotation; // transport kierunku
+            }
+        }
+
+        // 5) Kopanie (z blokadą do końca DigStart)
+        bool freezeDepth = delayDepthUntilAfterDigStart && (gateLocked || IsInDigStart());
+        UpdateDepth(digHeld, freezeDepth);
+
+        // 6) Snap do powłoki + stabilizacja rotacji
+        up = Up();
+        transform.position = planet.Center + up * ShellRadius();
+        Vector3 fwdFinal = ProjectOnPlaneSafe(transform.forward, up);
+        Quaternion targetRot = Quaternion.LookRotation(fwdFinal, up);
+        transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, 1f - Mathf.Exp(-rotSmooth * Time.deltaTime));
+
+        // 7) Kamera
+        if (cameraPivot)
+        {
+            cameraPivot.position = transform.position;
+            Vector3 camFwd = ProjectOnPlaneSafe(cameraPivot.forward, up);
+            cameraPivot.rotation = Quaternion.LookRotation(camFwd, up);
+        }
+    }
+
+    // ───────────────────── helpers ─────────────────────
+    Vector3 Up() => planet.UpAt(transform.position);
+    float  ShellRadius() => Mathf.Max(0.01f, planet.radius - depth);
+
+    static Vector3 ProjectOnPlaneSafe(Vector3 v, Vector3 n)
+    {
+        Vector3 p = Vector3.ProjectOnPlane(v, n);
+        if (p.sqrMagnitude < EPS)
+        {
+            p = Vector3.Cross(n, Vector3.right);
+            if (p.sqrMagnitude < EPS) p = Vector3.Cross(n, Vector3.forward);
+        }
+        return p.normalized;
+    }
+
+    void ReadInput(out float yaw, out float move, out bool digHeld)
+    {
+        yaw = move = 0f; digHeld = false;
         #if ENABLE_INPUT_SYSTEM
-        var kb = Keyboard.current;
-        var gp = Gamepad.current;
-
+        var kb = Keyboard.current; var gp = Gamepad.current;
         if (kb != null)
         {
-            if (kb.aKey.isPressed || kb.leftArrowKey.isPressed)  yawInput -= 1f;
-            if (kb.dKey.isPressed || kb.rightArrowKey.isPressed) yawInput += 1f;
-            if (kb.wKey.isPressed || kb.upArrowKey.isPressed)    moveInput += 1f;
-            if (kb.sKey.isPressed || kb.downArrowKey.isPressed)  moveInput -= 1f;
+            if (kb.aKey.isPressed || kb.leftArrowKey.isPressed)  yaw -= 1f;
+            if (kb.dKey.isPressed || kb.rightArrowKey.isPressed) yaw += 1f;
+            if (kb.wKey.isPressed || kb.upArrowKey.isPressed)    move += 1f;
+            if (kb.sKey.isPressed || kb.downArrowKey.isPressed)  move -= 1f;
             digHeld = kb.spaceKey.isPressed;
         }
         if (gp != null)
         {
-            yawInput += gp.leftStick.x.ReadValue();   // lewo/prawo = yaw
-            moveInput += gp.leftStick.y.ReadValue();  // przód/tył = ruch
+            yaw  += gp.leftStick.x.ReadValue();
+            move += gp.leftStick.y.ReadValue();
             digHeld |= gp.buttonSouth.isPressed;
         }
         #else
-        yawInput = Input.GetAxisRaw("Horizontal"); // A/D
-        moveInput = Input.GetAxisRaw("Vertical");  // W/S
-        digHeld = Input.GetButton("Jump");         // Space
+        yaw = Input.GetAxisRaw("Horizontal");
+        move = Input.GetAxisRaw("Vertical");
+        digHeld = Input.GetButton("Jump");
         #endif
+    }
 
-        // --- Obrót A/D wokół lokalnego 'up' (yaw bez przesuwania) ---
-        if (Mathf.Abs(yawInput) > 1e-4f)
+    void DriveAnimator(bool digHeld)
+    {
+        if (!animator) return;
+
+        // guard: nie strzelaj DigStart gdy już wchodzisz do DigStart
+        bool inStart = IsInDigStart();
+        if (digHeld && !prevDigHeld && !inStart)
         {
-            float yawDeg = yawInput * turnSpeedDeg * Time.deltaTime;
-            Quaternion yawRot = Quaternion.AngleAxis(yawDeg, up);
-            // Obróć tylko kierunek patrzenia; pozycję ruszymy dopiero w sekcji ruchu
-            Vector3 fwd = Vector3.ProjectOnPlane(transform.forward, up).normalized;
-            fwd = yawRot * fwd;
-            transform.rotation = Quaternion.LookRotation(fwd, up);
+            animator.ResetTrigger(hDigStop);
+            animator.SetTrigger(hDigStart);
+            gateLocked = true; // natychmiast blokuj zmianę depth
+        }
+        else if (!digHeld && prevDigHeld)
+        {
+            animator.ResetTrigger(hDigStart);
+            animator.SetTrigger(hDigStop);
         }
 
-        // --- Kopanie / wynurzanie ---
-        float targetDepth = currentDepth;
-        if (digHeld)
-            targetDepth = Mathf.Min(maxDigDepth, currentDepth + digSpeed * Time.deltaTime);
-        else
-            targetDepth = Mathf.Max(0f, currentDepth - ascendSpeed * Time.deltaTime);
-        currentDepth = targetDepth;
+        animator.SetBool(hIsDigging, digHeld);
+        prevDigHeld = digHeld;
 
-        // --- Ruch W/S po wielkim kole (geodezyjnie) ---
-        // Definicja: obracamy wektor od środka o kąt = (prędkość łukowa * dt) / promień,
-        // oś = up x forward. Ten sam obrót stosujemy do forward → stały kurs po wielkim kole.
-        float shellR = Mathf.Max(0.01f, planet.radius - currentDepth);
-        Vector3 posFromCenter = (transform.position - planet.Center).normalized * shellR;
-        Vector3 forwardT = Vector3.ProjectOnPlane(transform.forward, up).normalized;
+        // zwolnij gate po wyjściu z DigStart
+        if (gateLocked && !IsInDigStart()) gateLocked = false;
+    }
 
-        if (Mathf.Abs(moveInput) > 1e-4f)
+    bool IsInDigStart()
+    {
+        if (!animator) return false;
+        var st = animator.GetCurrentAnimatorStateInfo(0);
+        if (st.IsTag(digStartStateTag) && st.normalizedTime < digStartExitNormalizedTime) return true;
+        if (animator.IsInTransition(0))
         {
-            float arcLen = moveSpeed * Mathf.Clamp(moveInput, -1f, 1f) * Time.deltaTime;
-            float angleRad = arcLen / shellR;
-            float angleDeg = angleRad * Mathf.Rad2Deg;
-
-            Vector3 axis = Vector3.Cross(up, forwardT); // prawa ręka: W = do przodu
-            if (axis.sqrMagnitude > 1e-8f)
-            {
-                Quaternion step = Quaternion.AngleAxis(angleDeg, axis.normalized);
-                posFromCenter = step * posFromCenter;
-                forwardT      = (step * forwardT).normalized; // równoległe przetransportowanie (utrzymuje kurs)
-            }
+            var nt = animator.GetNextAnimatorStateInfo(0);
+            if (nt.IsTag(digStartStateTag)) return true;
         }
+        return false;
+    }
 
-        // Dociśnij do powłoki i ustaw transform
-        Vector3 newPos = planet.Center + posFromCenter;
-        transform.position = planet.PointOnShell(newPos, currentDepth);
-
-        // Korekta orientacji (pewne wyrównanie numeryczne)
-        up = planet.UpAt(transform.position);
-        Vector3 finalFwd = Vector3.ProjectOnPlane(forwardT, up).normalized;
-        if (finalFwd.sqrMagnitude < 1e-6f) finalFwd = Vector3.Cross(up, Vector3.right).normalized;
-        Quaternion targetRot = Quaternion.LookRotation(finalFwd, up);
-        transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, 1f - Mathf.Exp(-turnLerp * Time.deltaTime));
-
-        // Kamera pivot
-        if (cameraPivot)
-        {
-            cameraPivot.position = transform.position;
-            Vector3 pivotFwd = Vector3.ProjectOnPlane(cameraPivot.forward, up).normalized;
-            if (pivotFwd.sqrMagnitude < 1e-6f) pivotFwd = finalFwd;
-            cameraPivot.rotation = Quaternion.LookRotation(pivotFwd, up);
-        }
+    void UpdateDepth(bool digHeld, bool freeze)
+    {
+        if (freeze) return;
+        float v = digHeld ? +digSpeed : -ascendSpeed;
+        depth = Mathf.Clamp(depth + v * Time.deltaTime, 0f, maxDigDepth);
     }
 }

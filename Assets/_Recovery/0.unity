@@ -508,14 +508,14 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 851154032}
   serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalRotation: {x: -0.7071068, y: 0, z: 0, w: 0.7071068}
   m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 1582192363}
   m_Father: {fileID: 1927882379}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: -90, y: 0, z: 0}
 --- !u!95 &851154034
 Animator:
   serializedVersion: 7
@@ -804,7 +804,7 @@ MonoBehaviour:
   cameraPivot: {fileID: 488849469}
   moveSpeed: 8
   turnSpeedDeg: 360
-  rotSmooth: 15
+  turnLerp: 15
   maxDigDepth: 1
   digSpeed: 4
   ascendSpeed: 4
@@ -813,9 +813,9 @@ MonoBehaviour:
   paramIsDigging: IsDigging
   trigDigStart: DigStart
   trigDigStop: DigStop
+  delayDepthUntilAfterDigStart: 0
   digStartStateTag: DigStart
   digStartExitNormalizedTime: 0.98
-  delayDepthUntilAfterDigStart: 1
 --- !u!4 &1927882379
 Transform:
   m_ObjectHideFlags: 0
