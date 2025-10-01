@@ -6,9 +6,17 @@
   <component name="ChangeListManager">
     <list default="true" id="6d637c4d-feca-45aa-8954-2f8e1f5f9d4a" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/.idea.demo/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/.idea.demo/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Animations/DigLoop.anim" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Animations/DigLoop.anim" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Animations/DigStart.anim" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Animations/DigStart.anim" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Animations/PlayerAnimationController.controller" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Animations/PlayerAnimationController.controller" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/InputSystem_Actions.inputactions" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/InputSystem_Actions.inputactions" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Materials/PlanetSurfaceMaterial.mat" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Materials/PlanetSurfaceMaterial.mat" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Assets/Scenes/SampleScene.unity" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Scenes/SampleScene.unity" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Assets/Scripts/MoleKinematicController.cs" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Scripts/MoleKinematicController.cs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Assets/Scripts/OrbitCamera.cs" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Scripts/OrbitCamera.cs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Scripts/Planet.cs" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Scripts/Planet.cs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Assets/Shaders/PlanetSurfaceShader.shadergraph" beforeDir="false" afterPath="$PROJECT_DIR$/Assets/Shaders/PlanetSurfaceShader.shadergraph" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/ProjectSettings.asset" beforeDir="false" afterPath="$PROJECT_DIR$/ProjectSettings/ProjectSettings.asset" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ProjectSettings/TagManager.asset" beforeDir="false" afterPath="$PROJECT_DIR$/ProjectSettings/TagManager.asset" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -21,7 +29,10 @@
   <component name="HighlightingSettingsPerFile">
     <setting file="file://$PROJECT_DIR$/Assets/Scripts/MoleKinematicController.cs" root0="FORCE_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/Assets/Scripts/OrbitCamera.cs" root0="FORCE_HIGHLIGHTING" />
-    <setting file="file://$PROJECT_DIR$/Assets/Scripts/TunnelPortall.cs" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Assets/Scripts/PlanetBulgeDriver.cs" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Assets/Scripts/PlanetIcoSphere.cs" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Assets/Scripts/SimpleTunnelTeleporter.cs" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Assets/Scripts/TunnelEntrance.cs" root0="FORCE_HIGHLIGHTING" />
   </component>
   <component name="ProjectColorInfo">{
   &quot;customColor&quot;: &quot;&quot;,
@@ -113,7 +124,18 @@
       <workItem from="1759070820466" duration="1411000" />
       <workItem from="1759147674543" duration="4406000" />
       <workItem from="1759155958453" duration="1452000" />
-      <workItem from="1759159440588" duration="3587000" />
+      <workItem from="1759159440588" duration="3963000" />
+      <workItem from="1759165187373" duration="571000" />
+      <workItem from="1759168232163" duration="4669000" />
+      <workItem from="1759214271334" duration="207000" />
+      <workItem from="1759227748086" duration="3589000" />
+      <workItem from="1759233907173" duration="2083000" />
+      <workItem from="1759242596291" duration="1137000" />
+      <workItem from="1759245467720" duration="1310000" />
+      <workItem from="1759255375673" duration="3246000" />
+      <workItem from="1759297178504" duration="441000" />
+      <workItem from="1759304220823" duration="5938000" />
+      <workItem from="1759316289101" duration="1587000" />
     </task>
     <servers />
   </component>

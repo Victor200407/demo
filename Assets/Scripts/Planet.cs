@@ -10,7 +10,7 @@ public class Planet : MonoBehaviour
 
     public Vector3 UpAt(Vector3 worldPos)
     {
-        Vector3 up = worldPos - Center;
+        Vector3 up = worldPos - Center; // wektor od center do worldPos
         return up.sqrMagnitude > 1e-6f ? up.normalized : Vector3.up;
     }
 

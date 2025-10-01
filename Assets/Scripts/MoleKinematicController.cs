@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
@@ -13,7 +14,8 @@ public class MoleRotateAroundController : MonoBehaviour
     [SerializeField] private float moveSpeed = 6f;
     [SerializeField] private float turnSpeedDeg = 360f;
     [SerializeField] private float rotSmooth = 15f;
-
+    [SerializeField] private float digTurnSpeedDeg = 60f;
+    
     [Header("Kopanie")]
     [SerializeField] private float maxDigDepth = 2f;
     [SerializeField] private float digSpeed = 4f;
@@ -27,20 +29,43 @@ public class MoleRotateAroundController : MonoBehaviour
     [SerializeField] private string trigDigStop = "DigStop";
     [SerializeField] private string digStartStateTag = "DigStart";
     [SerializeField] private float digStartExitNormalizedTime = 0.98f;
-    [SerializeField] private bool delayDepthUntilAfterDigStart = true;
 
-    // ── stan
+    [Header("Wejścia tuneli (auto-spawn)")]
+    [SerializeField] private GameObject entrancePrefab;
+    [SerializeField] private float undergroundThreshold = 0.05f;
+    [SerializeField] private float entranceMinSpacing = 2.5f;
+    [SerializeField] private float entranceSurfaceOffset = 0.02f;
+    [SerializeField] private bool entranceDebugLogs = true;
+
+    [SerializeField] private TunnelRecorder recorder;
+    
+    [Header("Awaryjne wyjście (brak tlenu)")]
+    [SerializeField] private float forcedExitDuration = 0.6f;
+
     float depth;
     bool prevDigHeld; 
     bool gateLocked;
 
-    // ── cache hashy
+    bool wasUnderground;
+    readonly List<Transform> spawnedEntrances = new();
+    TunnelEntrance pendingPair;
+
     int hIsDigging;
     int hDigStart;
     int hDigStop;
 
-    // epsilon do porównań bliskich zeru
+    bool isForcedExiting;
+    float forcedExitT;
+    float forcedExitStartDepth;
+    bool suppressDigInput;
+
+    // === Rail control ===
+    bool railControlActive;
+
     const float EPS = 1e-6f;
+
+    public float Depth => depth;
+    public bool IsForcedExiting => isForcedExiting;
 
     void Reset()
     {
@@ -53,16 +78,12 @@ public class MoleRotateAroundController : MonoBehaviour
 
         depth = Mathf.Clamp(startDepth, 0f, maxDigDepth);
 
-        // startowa pozycja i rotacja
         Vector3 up = Up();
         transform.position = planet.Center + up * ShellRadius();
         Vector3 fwd = ProjectOnPlaneSafe(transform.forward, up);
         transform.rotation = Quaternion.LookRotation(fwd, up);
 
-        if (cameraPivot)
-        {
-            cameraPivot.position = transform.position;
-        }
+        if (cameraPivot) cameraPivot.position = transform.position;
 
         if (animator)
         {
@@ -70,24 +91,72 @@ public class MoleRotateAroundController : MonoBehaviour
             hDigStart  = Animator.StringToHash(trigDigStart);
             hDigStop   = Animator.StringToHash(trigDigStop);
         }
+
+        wasUnderground = depth > undergroundThreshold;
+        
+        if (!recorder) recorder = GetComponent<TunnelRecorder>();
     }
 
     void Update()
     {
         if (!planet) return;
 
-        // 1) Wejście
+        // --- Rail control: w tym trybie NIE dotykamy pozycji/rotacji gracza ---
+        if (railControlActive)
+        {
+            if (cameraPivot)
+            {
+                cameraPivot.position = transform.position;
+                Vector3 upRail = (transform.position - planet.Center).sqrMagnitude > EPS
+                    ? (transform.position - planet.Center).normalized : Vector3.up;
+                Vector3 camFwd = ProjectOnPlaneSafe(cameraPivot.forward, upRail);
+                cameraPivot.rotation = Quaternion.LookRotation(camFwd, upRail);
+            }
+            return;
+        }
+
+        // Input
         ReadInput(out float yaw, out float move, out bool digHeld);
 
-        // 2) Animator + gate
+        // Animator + gate
         DriveAnimator(digHeld);
+        
+        bool isUnderground = depth > undergroundThreshold;
+        
+        if (isUnderground && recorder)
+        {
+            recorder.TickRecord(transform.position, planet, depth);
+        }
 
-        // 3) Yaw w miejscu (A/D)
+
+        // Forced exit
+        if (isForcedExiting)
+        {
+            forcedExitT += (forcedExitDuration > 1e-6f ? Time.deltaTime / forcedExitDuration : 1f);
+            depth = Mathf.Lerp(forcedExitStartDepth, 0f, Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(forcedExitT)));
+
+            if (forcedExitT >= 1f || depth <= 0.001f)
+            {
+                depth = 0f;
+                isForcedExiting = false;
+                gateLocked = false;
+                suppressDigInput = false;
+
+                Vector3 upDone = Up();
+                transform.position = planet.Center + upDone * ShellRadius();
+                Vector3 fwdDone = ProjectOnPlaneSafe(transform.forward, upDone);
+                transform.rotation = Quaternion.LookRotation(fwdDone, upDone);
+            }
+        }
+
+        // Yaw
         Vector3 up = Up();
         if (Mathf.Abs(yaw) > EPS)
-            transform.Rotate(up, yaw * turnSpeedDeg * Time.deltaTime, Space.World);
+        {
+            transform.Rotate(up, (digHeld ? digTurnSpeedDeg : turnSpeedDeg) * yaw * Time.deltaTime, Space.World);
+        }
 
-        // 4) Ruch po wielkim kole (W/S)
+        // Ruch po wielkim kole
         if (Mathf.Abs(move) > EPS)
         {
             Vector3 fwdT = ProjectOnPlaneSafe(transform.forward, up);
@@ -97,31 +166,37 @@ public class MoleRotateAroundController : MonoBehaviour
             {
                 axis.Normalize();
                 transform.RotateAround(planet.Center, axis, angleDeg);
-                transform.rotation = Quaternion.AngleAxis(angleDeg, axis) * transform.rotation; // transport kierunku
+                transform.rotation = Quaternion.AngleAxis(angleDeg, axis) * transform.rotation;
             }
         }
 
-        // 5) Kopanie (z blokadą do końca DigStart)
-        bool freezeDepth = delayDepthUntilAfterDigStart && (gateLocked || IsInDigStart());
+        // Kopanie
+        bool freezeDepth = (gateLocked || IsInDigStart() || isForcedExiting);
         UpdateDepth(digHeld, freezeDepth);
 
-        // 6) Snap do powłoki + stabilizacja rotacji
+        // Snap + stabilizacja
         up = Up();
         transform.position = planet.Center + up * ShellRadius();
         Vector3 fwdFinal = ProjectOnPlaneSafe(transform.forward, up);
         Quaternion targetRot = Quaternion.LookRotation(fwdFinal, up);
         transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, 1f - Mathf.Exp(-rotSmooth * Time.deltaTime));
 
-        // 7) Kamera
+        // Kamera
         if (cameraPivot)
         {
             cameraPivot.position = transform.position;
             Vector3 camFwd = ProjectOnPlaneSafe(cameraPivot.forward, up);
             cameraPivot.rotation = Quaternion.LookRotation(camFwd, up);
         }
+
+        // Auto-spawn wejść
+        bool isUndergroundNow = depth > undergroundThreshold;
+        if (!wasUnderground && isUndergroundNow) TrySpawnEntranceHere("ENTRY");
+        if (wasUnderground && !isUndergroundNow) TrySpawnEntranceHere("EXIT");
+        wasUnderground = isUndergroundNow;
+        prevDigHeld = digHeld;
     }
 
-    // ───────────────────── helpers ─────────────────────
     Vector3 Up() => planet.UpAt(transform.position);
     float  ShellRadius() => Mathf.Max(0.01f, planet.radius - depth);
 
@@ -138,9 +213,12 @@ public class MoleRotateAroundController : MonoBehaviour
 
     void ReadInput(out float yaw, out float move, out bool digHeld)
     {
-        yaw = move = 0f; digHeld = false;
-        #if ENABLE_INPUT_SYSTEM
-        var kb = Keyboard.current; var gp = Gamepad.current;
+        yaw = move = 0f; 
+        digHeld = false;
+
+        var kb = Keyboard.current; 
+        var gp = Gamepad.current;
+
         if (kb != null)
         {
             if (kb.aKey.isPressed || kb.leftArrowKey.isPressed)  yaw -= 1f;
@@ -155,24 +233,21 @@ public class MoleRotateAroundController : MonoBehaviour
             move += gp.leftStick.y.ReadValue();
             digHeld |= gp.buttonSouth.isPressed;
         }
-        #else
-        yaw = Input.GetAxisRaw("Horizontal");
-        move = Input.GetAxisRaw("Vertical");
-        digHeld = Input.GetButton("Jump");
-        #endif
+
+        if (suppressDigInput || isForcedExiting)
+            digHeld = false;
     }
 
     void DriveAnimator(bool digHeld)
     {
         if (!animator) return;
 
-        // guard: nie strzelaj DigStart gdy już wchodzisz do DigStart
         bool inStart = IsInDigStart();
         if (digHeld && !prevDigHeld && !inStart)
         {
             animator.ResetTrigger(hDigStop);
             animator.SetTrigger(hDigStart);
-            gateLocked = true; // natychmiast blokuj zmianę depth
+            gateLocked = true;
         }
         else if (!digHeld && prevDigHeld)
         {
@@ -181,9 +256,6 @@ public class MoleRotateAroundController : MonoBehaviour
         }
 
         animator.SetBool(hIsDigging, digHeld);
-        prevDigHeld = digHeld;
-
-        // zwolnij gate po wyjściu z DigStart
         if (gateLocked && !IsInDigStart()) gateLocked = false;
     }
 
@@ -205,5 +277,106 @@ public class MoleRotateAroundController : MonoBehaviour
         if (freeze) return;
         float v = digHeld ? +digSpeed : -ascendSpeed;
         depth = Mathf.Clamp(depth + v * Time.deltaTime, 0f, maxDigDepth);
+    }
+
+    // Public API
+    public void BeginForcedExit()
+    {
+        if (isForcedExiting) return;
+        isForcedExiting = true;
+        forcedExitT = 0f;
+        forcedExitStartDepth = depth;
+
+        suppressDigInput = true;
+        gateLocked = true;
+
+        if (animator)
+        {
+            animator.ResetTrigger(hDigStart);
+            animator.SetTrigger(hDigStop);
+            animator.SetBool(hIsDigging, false);
+        }
+    }
+
+    public void BeginRailControl()
+    {
+        railControlActive = true;
+        suppressDigInput = true;
+        gateLocked = true;
+
+        if (animator)
+        {
+            animator.ResetTrigger(hDigStart);
+            animator.SetBool(hIsDigging, false);
+        }
+    }
+
+    public void EndRailControl()
+    {
+        railControlActive = false;
+        suppressDigInput  = false;
+        gateLocked        = false;
+    }
+
+    // Spawn wejść (bez zmian funkcjonalnych)
+    void TrySpawnEntranceHere(string reason)
+    {
+        if (!entrancePrefab)
+        {
+            if (entranceDebugLogs) Debug.LogWarning("[Entrance] Brak przypisanego prefab'u wejścia.", this);
+            return;
+        }
+
+        Vector3 onShell = planet.PointOnShell(transform.position, 0f);
+        Vector3 up = (onShell - planet.Center).sqrMagnitude > EPS
+            ? (onShell - planet.Center).normalized : Vector3.up;
+
+        Vector3 tangentFwd = ProjectOnPlaneSafe(transform.forward, up);
+        if (tangentFwd.sqrMagnitude < EPS)
+            tangentFwd = Vector3.Cross(up, Vector3.right).normalized;
+
+        foreach (var e in spawnedEntrances)
+        {
+            if (!e) continue;
+            if (Vector3.Distance(e.position, onShell) < entranceMinSpacing)
+            {
+                if (entranceDebugLogs) Debug.Log($"[Entrance] Za blisko innego wejścia – pomijam spawn ({reason}).");
+                return;
+            }
+        }
+
+        Vector3 spawnPos = onShell + up * entranceSurfaceOffset;
+        Quaternion rot = Quaternion.LookRotation(tangentFwd, up);
+        GameObject go = Instantiate(entrancePrefab, spawnPos, rot);
+
+        var te = go.GetComponent<TunnelEntrance>();
+        if (te != null)
+        {
+            te.Planet = planet;
+            te.SurfaceNormal = up;
+
+            if (reason == "ENTRY")
+            {
+                pendingPair = te;
+                if (recorder) recorder.BeginRecording(te);
+            }
+            else
+            {
+                if (pendingPair != null)
+                {
+                    te.Linked = pendingPair;
+                    pendingPair.Linked = te;
+                    
+                    if (recorder) recorder.EndRecording(pendingPair, te);
+                    
+                    pendingPair = null;
+                }
+            }
+        }
+
+        spawnedEntrances.Add(go.transform);
+
+        if (entranceDebugLogs)
+            Debug.Log($"[Entrance] Spawn {reason} @ {spawnPos}", go);
     }
 }
